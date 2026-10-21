@@ -1,71 +1,67 @@
 # VM Scheduled Operations
 
-**Status:** Draft for review. Proposed policies and open decisions are identified under Assumptions; the PRD is not yet approved.
+**Status:** Draft for review.
 
 | Field | Value |
 |---|---|
-| Author(s) | AI-assisted draft; curated by Codex for Eran Cohen |
+| Author(s) | Eran Cohen, with AI assistance |
 | Jira | [OSAC-4333](https://redhat.atlassian.net/browse/OSAC-4333) |
-| Date | 2026-10-12 |
+| Date | 2026-10-21 |
 
 ## Problem Statement
 
-Tenant teams use virtual machines for planned windows such as business hours, batch jobs, demos, and drills. Today they must start, stop, create, or tear down VMs by hand, or leave them running continuously; the source identifies avoidable cost and capacity waste, missed starts, VMs left running after hours, and operational work that grows with VM count and team handoffs. Schedules would make these operations follow intended usage windows instead of depending on memory and manual coordination. The scheduling service carries no additional charge. Resources continue to be metered and billed under the usual OSAC policies; scheduling an action does not change its billing rules.
+Tenant teams need VMs for known windows such as business hours, batch jobs, and demos. Starting and stopping them manually leads to missed starts, VMs left running after hours, and repeated operational work. Scheduling power-state changes lets teams plan VM availability without relying on someone remembering each operation.
+
+Scheduling has no service charge. Resource metering and billing follow the usual OSAC policies, as for equivalent manual operations.
 
 ## In Scope
 
-- Tenants can create, update, and cancel schedules with cron-like recurrence in UTC only.
-- A schedule can start or stop an existing VM, or provision or de-provision a VM.
-- The user can select a single VM, project, tags, or owner/user as the target.
-- Tenant Admins and Tenant Users can manage schedules within their authority. Tenant Admins can override schedules created by Tenant Users; the proposed meaning of “override” is listed under Assumptions for owner approval.
-- A missed or failed scheduled operation produces a UI alert and an email notification. Notification delivery depends on [OSAC-75](https://redhat.atlassian.net/browse/OSAC-75); the recipient policy remains to be confirmed below.
-- Scheduling has no service charge. Scheduled resources are metered and billed as usual, with the same billing behavior as the corresponding manual operations.
+- **VMaaS only:** create, view, update, and cancel schedules for Start or Stop of an existing VM. Each schedule identifies one VM and one action. A user can create separate Start and Stop schedules for the same VM.
+- **UTC cron:** recurring schedules use five-field, minute-resolution cron expressions in UTC. Invalid expressions are rejected, and users can see the next scheduled occurrence.
+- **Scheduled changes:** each occurrence requests the selected power state. The scheduler does not continuously enforce a time window. A manual power-state change remains effective until the next scheduled occurrence. For example, manually stopping a VM after its scheduled Start leaves it stopped until its next scheduled Start.
+- **Permissions:** Tenant Users manage their own schedules for VMs they are allowed to operate. Tenant Admins can inspect, edit, or cancel schedules within their tenant. Creating or editing a schedule requires permission for its VM action, and each occurrence checks the schedule owner's current permissions. An Admin edit retains the owner and records who changed the schedule; it does not grant the owner new permissions. Owners can cancel their schedules even after losing permission to operate the VM.
+- **Execution results:** users can see the last execution's status and distinguish a pending power-state change from a completed or failed operation. A VM already in the requested state is a successful no-op. A deleted VM or lost permission is reported as a failure.
+- **Missed or failed occurrences:** report the failure and leave future occurrences enabled. V1 does not automatically retry failed occurrences or replay missed ones after recovery. An older occurrence must not override a newer scheduled or manual change.
+- **Conflicts:** if Start and Stop are due for the same VM at the same time, apply neither and report the conflict to the affected schedule owners.
+- **Notifications:** notify the schedule owner of failed or missed occurrences through a UI alert and email. Tenant Admins can inspect execution status for their tenant. Delivery depends on [OSAC-75](https://redhat.atlassian.net/browse/OSAC-75).
+- **Reusable scheduling:** schedule management should support future extensions to other resource actions and schedule types without requiring a separate scheduler for each service. Only VM Start/Stop is exposed in this release; the API representation is decided in the technical design.
 
 ## Out of Scope
 
-- Cloud Provider Admin and Cloud Infrastructure Admin capabilities are unaffected by this feature.
-- **Proposed exclusions for owner confirmation:** clusters, bare metal, autoscaling, time zones other than UTC, and notification channels beyond UI alerts and email. The source gives these as examples for the PRD to refine; this draft does not treat them as approved exclusions.
+- VM creation, provisioning, deletion, and de-provisioning.
+- Resizing, changing instance types, and scaling of any kind, including time-based and usage-based scaling.
+- Project, tag, owner/user, or other dynamic target selectors; bulk or multi-VM schedules.
+- Other VM field updates, arbitrary API execution, and user-supplied arbitrary patches.
+- Scheduling for clusters, bare metal, or other services.
+- Rate-based and one-time schedules, non-UTC time zones, and continuous enforcement of power-state windows.
+- Configurable retries, catch-up execution, and notification channels beyond UI alerts and email.
+- Changes to Cloud Provider Admin or Cloud Infrastructure Admin capabilities.
 
 ## User Stories
 
-### Tenant Admin
-
-- As a Tenant Admin, I want to schedule Start and Stop for an existing VM or a selected set of VMs so that my tenant's capacity and cost follow planned usage windows.
-- As a Tenant Admin, I want to schedule VM provisioning and de-provisioning for a selected target so that tenant capacity follows planned needs.
-- As a Tenant Admin, I want to create, update, and cancel cron-like schedules in UTC, using a single VM, project, tags, or owner/user as the target, so that I can manage those operations across the tenant.
-- As a Tenant Admin, I want to override or manage schedules created by Tenant Users so that tenant policy and cost controls remain enforceable.
-- As a Tenant Admin, I want a UI alert and email when a scheduled operation is missed or fails so that I can remediate it.
-
 ### Tenant User
 
-- As a Tenant User, I want to schedule Start and Stop for VMs I am allowed to operate so that my workloads are available during the windows I need.
-- As a Tenant User, I want to schedule provisioning and de-provisioning for VMs I am allowed to operate so that I can align those operations with planned usage.
-- As a Tenant User, I want to create, update, and cancel cron-like schedules in UTC, using a single VM, project, tags, or owner/user as the target, so that I can manage allowed VM operations without manual intervention.
-- As a Tenant User, I want a UI alert and email when a scheduled operation is missed or fails so that I know when an action did not complete.
+- As a Tenant User, I want to create, update, view, and cancel UTC cron schedules for Start or Stop of one existing VM I am allowed to operate, so that it is available during planned usage periods.
+- As a Tenant User, I want to see execution results and receive UI and email alerts for failed or missed occurrences, so that I can act when a scheduled change does not complete.
 
-## Assumptions
+### Tenant Admin
 
-The policy proposals below require review. Notification availability and the billing rules stated above were confirmed by the feature owner; the remaining proposals are defaults for discussion only.
-
-- **Tenant Admin override — proposed:** within their own tenant, an Admin can inspect, edit, or cancel a Tenant User's schedule, including its action, recurrence, and targets. The UI should retain the creator and identify the Admin who made a change. Confirm whether override includes all these controls or only some of them. No cross-tenant authority or diagnostic access is proposed.
-- **Delayed authorization — proposed:** check a user's authority when a schedule is created or changed and again before each scheduled operation. If that authority is gone, do not silently use an Admin identity; report the failure in the UI and by email. The owner must decide which identity executes delayed work and what an authorized Admin may take over.
-- **Target timing — proposed:** resolve project, tags, and owner/user membership when each occurrence runs, within the schedule's tenant and authorized scope. Confirm whether membership should instead be fixed when the schedule is created or last edited. This choice is especially important for de-provisioning.
-- **Provisioning inputs — open:** define the VM information and destination a user supplies to provision a VM, and how the four target selectors apply to newly provisioned VMs. The proposal is to require a VM definition and destination, but neither is an approved input contract.
-- **Stop and de-provision effects — open:** scheduled actions follow the existing lifecycle, retention, and billing behavior of the corresponding manual operations. Treat de-provisioning as distinct from reversible Stop and disclose its effects before a user schedules it; the destructive-action confirmation flow still requires owner approval. Resource billing remains governed by the usual policies.
-- **Recurrence and failures — open:** define the accepted cron-like expression format and behavior for missed occurrences, retries, overlapping runs, and partial failures across multiple targets. Proposed default: retain the schedule and report each failed occurrence; do not silently retry or replay a backlog of missed operations until those rules are approved.
-- **Notification recipients — open:** UI alerts and email remain release requirements, dependent on OSAC-75. Confirm who receives alerts (schedule creator, Tenant Admin, affected Tenant User, or a combination). OSAC does not currently support notifications; this was confirmed by the feature owner on 2026-10-12.
+- As a Tenant Admin, I want the same scheduling capabilities for VMs I am allowed to operate and the ability to inspect, edit, or cancel Tenant User schedules within my tenant, so that I can enforce tenant policy and manage operational problems.
 
 ## Dependencies
 
-- UX and UI must be delivered per the bootstrap UX/UI Design gates, and both the PRD and technical Design must be merged for completion.
-- **[Notifications — OSAC-75](https://redhat.atlassian.net/browse/OSAC-75):** OSAC has no notification support yet. This feature depends on that capability for scheduled-operation failure alerts in the UI and by email. The notification capability must be available to satisfy the full failure-notification requirement; UI-only delivery does not satisfy it.
+- **[Notifications — OSAC-75](https://redhat.atlassian.net/browse/OSAC-75):** the notification capability is required for UI and email failure alerts. Both channels remain acceptance requirements.
+- UX and UI must be delivered through the bootstrap UX/UI Design gates. Completion requires the PRD and technical Design to be merged.
 
 ---
 
 ## Provenance
 
-Committed: commit @ prd 0.11.3 - d9d66a5, workspace main @ 0fe0e4595 (15 behind origin/main)
+Authored: commit @ prd 0.11.3 - d9d66a5, workspace main @ 0fe0e4595 (15 behind origin/main)
+Final: respond @ prd 0.11.3 - d9d66a5, workspace main @ c93dba0d7
 
-> Authoring phases not recorded this session (commit-time snapshot only).
+> Context changed between commit and respond.
 
-<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"commit_only","workflow":"prd","workflow_version":"0.11.3","ai_workflows":"d9d66a5","source_repo":"0fe0e4595","source_repo_branch":"main","commits_behind_main":15,"commits_ahead_main":0,"main_ref":"main","phases":["commit"],"authoring_modes":["skill"],"context_changed":false,"origin_untracked":false} -->
+> This document's phase history does not include an initial /draft — structure was not verified against the template from origin.
+
+<!-- ai-workflow-provenance:{"schema_version":1,"provenance_kind":"session","workflow":"prd","workflow_version":"0.11.3","ai_workflows":"d9d66a5","source_repo":"c93dba0d7","source_repo_branch":"main","commits_behind_main":0,"commits_ahead_main":0,"main_ref":"main","phases":["commit","respond"],"authoring_modes":["skill"],"context_changed":true,"origin_untracked":true} -->
